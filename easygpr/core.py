@@ -4,6 +4,8 @@ import numpy as np
 import pandas as pd
 from kernels import KernelWrapper
 from utils.settings import set_gpytorch_settings
+import utils.data_handling as data_handling
+
 
 set_gpytorch_settings()
 
@@ -31,6 +33,8 @@ class GPRModel(gpytorch.models.ExactGP):
         self.kernel_wrapper = KernelWrapper()
         self.kernel_wrapper.create_kernel(kernel, **kernel_kwargs)
         self.covar_module = self.kernel_wrapper.get_kernel_instance()
+
+        self.predictions = None
 
     def forward(self, x):
         mean_x = self.mean_module(x)
@@ -67,7 +71,7 @@ class GPRModel(gpytorch.models.ExactGP):
 
         return self
 
-    def make_predictions(self, test_x):
+    def make_predictions(self, test_x, return_type="numpy"):
         """
         Make predictions using the fitted GPR model.
 
@@ -82,8 +86,15 @@ class GPRModel(gpytorch.models.ExactGP):
 
         with torch.no_grad(), gpytorch.settings.fast_pred_var():
             predictions = self.likelihood(self(test_x))
+            self.predictions = Predictions(predictions.mean, predictions.variance)
 
-        return predictions
+        if return_type == "numpy":
+            self.predictions.to_numpy()
+        elif return_type == "torch":
+            pass
+        else:
+            raise ValueError("Invalid return_type. Valid options are 'numpy' and 'torch'.")
+        return self.predictions
 
     def compute_bic(self, data):
         """
@@ -107,6 +118,22 @@ class GPRModel(gpytorch.models.ExactGP):
 
 # Additional utility functions can be added here as necessary
 
+class Predictions:
+    def __init__(self, mean, variance):
+        self.mean = mean
+        self.variance = variance
+
+    def to_numpy(self):
+        self.mean = data_handling.to_numpy(self.mean)
+        self.variance = data_handling.to_numpy(self.variance)
+
+    def to_torch(self):
+        self.mean = data_handling.to_torch(self.mean)
+        self.variance = data_handling.to_torch(self.mean)
+
+
 if __name__ == "__main__":
     # Example usage of the GPRModel class and utility functions
     pass
+
+
