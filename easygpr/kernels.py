@@ -94,6 +94,8 @@ class KernelWrapper:
             self.kernel_instance = MinKernel(**kwargs)
         else:
             raise ValueError(f"Unknown kernel type: {kernel_type}")
+        # todo: handle kernel addition and multiplication
+        self.kernel_instance = gpytorch.kernels.ScaleKernel(self.kernel_instance)
 
     def get_kernel_instance(self):
         return self.kernel_instance
