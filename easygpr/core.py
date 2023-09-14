@@ -25,10 +25,19 @@ class GPRModel(gpytorch.models.ExactGP):
         - kernel (Kernel): The kernel function to use for the GPR.
     """
 
-    def __init__(self, train_x, train_y, kernel="rbf", kernel_kwargs={}, likelihood=None, mean = "constant"):
+    def __init__(self, train_x, train_y, kernel="rbf", scale_x=True, kernel_kwargs={}, likelihood=None, mean = "constant"):
+        if scale_x is True:
+            # Initialize and fit the MinMaxScaler
+            self.scaler = MinMaxScaler()
+        else:
+            self.scaler = NoScale()
+
+        self.scaler.fit(train_x)
+        self.train_x_scaled = self.scaler.scale(train_x)
+        
         if likelihood is None:
             likelihood = gpytorch.likelihoods.GaussianLikelihood()
-        super(GPRModel, self).__init__(train_x, train_y, likelihood)
+        super(GPRModel, self).__init__(self.train_x_scaled, train_y, likelihood)
 
         # Initialize the mean module based on the specified type
         if mean == "none":
@@ -46,14 +55,13 @@ class GPRModel(gpytorch.models.ExactGP):
         self.covar_module = self.kernel_wrapper.get_kernel_instance()
 
         self.predictions = None
-        self.scaler = None
 
     def forward(self, x):
         mean_x = self.mean_module(x)
         covar_x = self.covar_module(x)
         return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
 
-    def fit_model(self, train_x, train_y, training_iterations=50, scale_x = True, verbose = True):
+    def fit_model(self, train_x, train_y, training_iterations=50, verbose = True):
         """
         Fit the GPR model to the training data.
 
@@ -74,15 +82,6 @@ class GPRModel(gpytorch.models.ExactGP):
 
         self.train_x = train_x
         self.train_y = train_y
-
-        if scale_x is True:
-            # Initialize and fit the MinMaxScaler
-            self.scaler = MinMaxScaler()
-        else:
-            self.scaler = NoScale()
-
-        self.scaler.fit(train_x)
-        self.train_x_scaled = self.scaler.scale(train_x)
 
         self.train()
         self.likelihood.train()
@@ -132,7 +131,8 @@ class GPRModel(gpytorch.models.ExactGP):
         test_x_scaled = test_x
 
         # TODO: figure out why this produces the incorrect result, despite it seeming correct on paper
-        #test_x_scaled = self.scaler.scale(test_x)
+        test_x_scaled = self.scaler.scale(test_x)
+        print(test_x_scaled)
 
 
 
