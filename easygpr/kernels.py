@@ -1,3 +1,4 @@
+
 import torch
 import gpytorch
 from gpytorch.kernels.kernel import Kernel
@@ -6,6 +7,17 @@ from gpytorch.constraints import Interval
 from gpytorch.lazy import MatmulLazyTensor
 from typing import Optional
 
+# Existing content
+import torch
+import gpytorch
+from gpytorch.kernels.kernel import Kernel
+from gpytorch.priors import Prior
+from gpytorch.constraints import Interval
+from gpytorch.lazy import MatmulLazyTensor
+from typing import Optional
+
+from utils.settings import set_gpytorch_settings
+set_gpytorch_settings()
 
 class MinKernel(Kernel):
 
@@ -74,10 +86,16 @@ class KernelWrapper:
         self.kernel_instance = None
 
     def create_kernel(self, kernel_type, **kwargs):
-        if kernel_type in ["rbf", "squared exponential", "gaussian"]:
+        print(kernel_type)
+        if isinstance(kernel_type, str):
+            kernel_type = kernel_type.lower()
+        if not isinstance(kernel_type, str):
+            # todo: better handling of custom kernels
+            self.kernel_instance = kernel_type
+        elif kernel_type in ["rbf", "squared exponential", "gaussian"]:
             # The RBF kernel has many names
             self.kernel_instance = gpytorch.kernels.RBFKernel(**kwargs)
-        elif kernel_type in ["exp", "exponential", "laplace", "mat12"]:
+        elif kernel_type in ["exp", "exponential", "laplace", "mat12", "m12"]:
             # The exponential kernel has many names
             self.kernel_instance = gpytorch.kernels.MaternKernel(nu=0.5, **kwargs)
         elif kernel_type.startswith("mat"):
@@ -88,10 +106,11 @@ class KernelWrapper:
             else:
                 nu_value = float(kernel_type.split("_")[1])
             self.kernel_instance = gpytorch.kernels.MaternKernel(nu=nu_value, **kwargs)
-        elif kernel_type == "linear":
+        elif kernel_type.startswith("lin"):
             self.kernel_instance = gpytorch.kernels.LinearKernel(**kwargs)
-        elif kernel_type == "minimum":
+        elif kernel_type.startswith("min"):
             self.kernel_instance = MinKernel(**kwargs)
+
         else:
             raise ValueError(f"Unknown kernel type: {kernel_type}")
         # todo: handle kernel addition and multiplication
@@ -106,3 +125,27 @@ class KernelWrapper:
                 print(f"{name}: {param.item()}")
         else:
             print("No kernel instance created yet.")
+
+# New kernel definitions
+class RBFKernel(gpytorch.kernels.RBFKernel):
+    def __init__(self):
+        super().__init__()
+        self.lengthscale = torch.tensor([1.0])
+
+class LinearKernel(gpytorch.kernels.LinearKernel):
+    def __init__(self):
+        super().__init__()
+        self.variance = torch.tensor([1.0])
+
+class PeriodicKernel(gpytorch.kernels.PeriodicKernel):
+    def __init__(self):
+        super().__init__()
+
+class ExponentialKernel(gpytorch.kernels.MaternKernel):
+    def __init__(self):
+        super().__init__(nu=0.5)
+        self.lengthscale = torch.tensor([1.0])
+
+class ProductKernel(gpytorch.kernels.ProductKernel):
+    def __init__(self, kern1, kern2):
+        super().__init__(kern1, kern2)

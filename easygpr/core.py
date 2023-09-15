@@ -1,15 +1,18 @@
+from utils.settings import set_gpytorch_settings
+set_gpytorch_settings()
+
 import torch
 import gpytorch
 import numpy as np
 import pandas as pd
 from kernels import KernelWrapper
-from utils.settings import set_gpytorch_settings
+
 from utils.data_handling import MinMaxScaler, NoScale
 import utils.data_handling as data_handling
 
 
 
-set_gpytorch_settings()
+
 
 
 class GPRModel(gpytorch.models.ExactGP):
@@ -25,19 +28,38 @@ class GPRModel(gpytorch.models.ExactGP):
         - kernel (Kernel): The kernel function to use for the GPR.
     """
 
-    def __init__(self, train_x, train_y, kernel="rbf", scale_x=True, kernel_kwargs={}, likelihood=None, mean = "constant"):
+    def __init__(self, train_x = None, train_y = None, kernel="rbf", scale_x=True, kernel_kwargs={}, likelihood=None, mean = "constant"):
+
+        self.scale_x = scale_x
+
+        if likelihood is None:
+            likelihood = gpytorch.likelihoods.GaussianLikelihood()
+
+
         if scale_x is True:
             # Initialize and fit the MinMaxScaler
             self.scaler = MinMaxScaler()
         else:
             self.scaler = NoScale()
 
-        self.scaler.fit(train_x)
-        self.train_x_scaled = self.scaler.scale(train_x)
-        
-        if likelihood is None:
-            likelihood = gpytorch.likelihoods.GaussianLikelihood()
-        super(GPRModel, self).__init__(self.train_x_scaled, train_y, likelihood)
+        # Case of no training data, e.g. for prior GPs
+        if train_x is None and train_y is None:
+            self.train_x_scaled = None
+
+        # Scale and handle data
+        else:
+            if isinstance(train_x, np.ndarray):
+                train_x = data_handling.to_torch(train_x)
+            if isinstance(train_y, np.ndarray):
+                train_y = data_handling.to_torch(train_y)
+            self.scaler.fit(train_x)
+            self.train_x_scaled = self.scaler.scale(train_x)
+
+        self.train_x = train_x
+        self.train_y = train_y
+
+        # Correctly initialize according to gpytorch.models.ExactGP
+        super(GPRModel, self).__init__(self.train_x_scaled, self.train_y, likelihood)
 
         # Initialize the mean module based on the specified type
         if mean == "none":
@@ -56,12 +78,13 @@ class GPRModel(gpytorch.models.ExactGP):
 
         self.predictions = None
 
+
     def forward(self, x):
         mean_x = self.mean_module(x)
         covar_x = self.covar_module(x)
         return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
 
-    def fit_model(self, train_x, train_y, training_iterations=50, verbose = True):
+    def fit_model(self, training_iterations=50, verbose = True):
         """
         Fit the GPR model to the training data.
 
@@ -73,15 +96,6 @@ class GPRModel(gpytorch.models.ExactGP):
         Returns:
             - self: The fitted GPR model.
         """
-
-        # Convert inputs to torch tensors if they are numpy arrays
-        if isinstance(train_x, np.ndarray):
-            train_x = data_handling.to_torch(train_x)
-        if isinstance(train_y, np.ndarray):
-            train_y = data_handling.to_torch(train_y)
-
-        self.train_x = train_x
-        self.train_y = train_y
 
         self.train()
         self.likelihood.train()
@@ -99,7 +113,7 @@ class GPRModel(gpytorch.models.ExactGP):
             optimizer.zero_grad()
             output = self(self.train_x_scaled)
 
-            loss = -mll(output, train_y)
+            loss = -mll(output, self.train_y)
             loss.backward()
             optimizer.step()
 
@@ -114,6 +128,56 @@ class GPRModel(gpytorch.models.ExactGP):
 
 
         return self
+
+
+    def simulate(self, x_sim, method='prior', type='f', return_type = 'numpy', n_paths = 1):
+        """
+        This method generates samples from a multivariate normal distribution, either from the prior or the posterior.
+
+        Parameters:
+        x_sim (torch.Tensor): The x values for which the samples will be generated.
+        method (str): Specifies whether to generate samples from the 'prior' or the 'posterior'. Default is 'prior'.
+        type (str): Specifies the type of samples to generate - 'f' for the underlying GP (function values) and 'y' for predictions (observations). Default is 'f'.
+
+        Returns:
+        torch.Tensor: Generated samples.
+        """
+        if n_paths > 1:
+            # todo: address this case
+            raise NotImplementedError("Currently supports simulating one sample path.  You can rerun 'simulate' to get additional paths.")
+
+        # Strangely, GPyTorch doesn't allow "train mode" (i.e. prior) if there is no training data.
+        if self.train_x is None and self.train_y is None:
+            self.eval()
+        else:
+            if method == 'prior':
+                self.train()
+            elif method == 'posterior':
+                self.eval()
+
+        if isinstance(x_sim, np.ndarray):
+            x_sim = data_handling.to_torch(x_sim)
+
+        with torch.no_grad():
+            # Getting the predictive distribution
+            predictive_dist = self(x_sim)
+
+            if type == 'f':
+                # Getting samples from the GP (prior or posterior)
+                realizations = predictive_dist.rsample()
+            elif type == 'y':
+                # Getting samples from the likelihood (observations)
+                realizations = self.likelihood(predictive_dist).rsample()
+
+            if return_type == "numpy":
+                realizations = data_handling.to_numpy(realizations)
+            elif return_type == "torch":
+                pass
+            else:
+                raise ValueError("Invalid return_type. Valid options are 'numpy' and 'torch'.")
+            return realizations
+
+
 
     def make_predictions(self, test_x, type = "f", return_type="numpy"):
         """
