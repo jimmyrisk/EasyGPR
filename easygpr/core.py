@@ -1,14 +1,15 @@
-from utils import set_gpytorch_settings
+# TODO: clean up imports
+from easygpr.utils import set_gpytorch_settings
 set_gpytorch_settings()
 
 import torch
 import gpytorch
 import numpy as np
-from kernels import KernelWrapper
+from easygpr.kernels import KernelWrapper
 
-from utils import MinMaxScaler, NoScale
-import utils
-from likelihoods import ScaledHeteroNoiseGaussianLikelihood
+from easygpr.utils import MinMaxScaler, NoScale
+import easygpr.utils as utils
+from easygpr.likelihoods import ScaledHeteroNoiseGaussianLikelihood
 
 
 

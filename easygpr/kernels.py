@@ -7,7 +7,7 @@ from gpytorch.constraints import Interval
 from gpytorch.lazy import MatmulLazyTensor
 from typing import Optional
 
-from utils import set_gpytorch_settings
+from easygpr.utils import set_gpytorch_settings
 set_gpytorch_settings()
 
 class MinKernel(Kernel):
