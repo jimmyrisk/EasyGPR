@@ -77,7 +77,6 @@ class KernelWrapper:
         self.kernel_instance = None
 
     def create_kernel(self, kernel_type, **kwargs):
-        print(kernel_type)
         if isinstance(kernel_type, str):
             kernel_type = kernel_type.lower()
         if not isinstance(kernel_type, str):

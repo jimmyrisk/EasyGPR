@@ -214,11 +214,7 @@ class GPRModel(gpytorch.models.ExactGP):
         self.eval()
         self.likelihood.eval()
 
-        test_x_scaled = test_x
-
-        # TODO: figure out why this produces the incorrect result, despite it seeming correct on paper
         test_x_scaled = self.scaler.scale(test_x)
-        print(test_x_scaled)
 
 
 
