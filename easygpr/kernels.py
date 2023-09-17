@@ -1,12 +1,3 @@
-
-import torch
-import gpytorch
-from gpytorch.kernels.kernel import Kernel
-from gpytorch.priors import Prior
-from gpytorch.constraints import Interval
-from gpytorch.lazy import MatmulLazyTensor
-from typing import Optional
-
 # Existing content
 import torch
 import gpytorch
@@ -16,7 +7,7 @@ from gpytorch.constraints import Interval
 from gpytorch.lazy import MatmulLazyTensor
 from typing import Optional
 
-from utils.settings import set_gpytorch_settings
+from utils import set_gpytorch_settings
 set_gpytorch_settings()
 
 class MinKernel(Kernel):

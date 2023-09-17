@@ -1,14 +1,14 @@
-from utils.settings import set_gpytorch_settings
+from utils import set_gpytorch_settings
 set_gpytorch_settings()
 
 import torch
 import gpytorch
 import numpy as np
-import pandas as pd
 from kernels import KernelWrapper
 
-from utils.data_handling import MinMaxScaler, NoScale
-import utils.data_handling as data_handling
+from utils import MinMaxScaler, NoScale
+import utils
+from likelihoods import ScaledHeteroNoiseGaussianLikelihood
 
 
 
@@ -28,9 +28,10 @@ class GPRModel(gpytorch.models.ExactGP):
         - kernel (Kernel): The kernel function to use for the GPR.
     """
 
-    def __init__(self, train_x = None, train_y = None, kernel="rbf", scale_x=True, kernel_kwargs={}, likelihood=None, mean = "constant"):
+    def __init__(self, train_x=None, train_y=None, kernel="rbf", scale_x=True, kernel_kwargs={}, likelihood=None, mean="constant", noise_x=None, heteroskedastic=False):
 
         self.scale_x = scale_x
+        self.noise_x = noise_x
 
         if likelihood is None:
             likelihood = gpytorch.likelihoods.GaussianLikelihood()
@@ -49,9 +50,9 @@ class GPRModel(gpytorch.models.ExactGP):
         # Scale and handle data
         else:
             if isinstance(train_x, np.ndarray):
-                train_x = data_handling.to_torch(train_x)
+                train_x = utils.to_torch(train_x)
             if isinstance(train_y, np.ndarray):
-                train_y = data_handling.to_torch(train_y)
+                train_y = utils.to_torch(train_y)
             self.scaler.fit(train_x)
             self.train_x_scaled = self.scaler.scale(train_x)
 
@@ -78,13 +79,24 @@ class GPRModel(gpytorch.models.ExactGP):
 
         self.predictions = None
 
+        # Add a trainable noise parameter
+        if heteroskedastic:
+            self.sigma = torch.nn.Parameter(torch.tensor(1.0), requires_grad=True)
+            noise = self.sigma * noise_x  # Compute heteroskedastic noise
+            self.likelihood = ScaledHeteroNoiseGaussianLikelihood(
+                noise=noise
+            )
 
     def forward(self, x):
         mean_x = self.mean_module(x)
         covar_x = self.covar_module(x)
-        return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
 
-    def fit_model(self, training_iterations=50, verbose = True):
+        if self.noise_x is not None:
+            return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
+        else:
+            return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
+
+    def fit_model(self, training_iterations=50, verbose = True, cosine_annealing = True):
         """
         Fit the GPR model to the training data.
 
@@ -100,9 +112,16 @@ class GPRModel(gpytorch.models.ExactGP):
         self.train()
         self.likelihood.train()
 
+        optimizer = torch.optim.Adam(self.parameters(), lr=0.1)
+
+        if cosine_annealing == True:
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts
+            scheduler = scheduler(optimizer=optimizer,  T_0 = 5, T_mult = 1)
+        else:
+            scheduler = None
 
         # Use the adam optimizer
-        optimizer = torch.optim.Adam(self.parameters(), lr=0.1)
+
 
         # "Loss" for GPs - the marginal log likelihood
         mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, self)
@@ -116,6 +135,9 @@ class GPRModel(gpytorch.models.ExactGP):
             loss = -mll(output, self.train_y)
             loss.backward()
             optimizer.step()
+
+            if scheduler is not None:
+                scheduler.step()
 
         self.compute_bic()
 
@@ -156,7 +178,7 @@ class GPRModel(gpytorch.models.ExactGP):
                 self.eval()
 
         if isinstance(x_sim, np.ndarray):
-            x_sim = data_handling.to_torch(x_sim)
+            x_sim = utils.to_torch(x_sim)
 
         with torch.no_grad():
             # Getting the predictive distribution
@@ -170,7 +192,7 @@ class GPRModel(gpytorch.models.ExactGP):
                 realizations = self.likelihood(predictive_dist).rsample()
 
             if return_type == "numpy":
-                realizations = data_handling.to_numpy(realizations)
+                realizations = utils.to_numpy(realizations)
             elif return_type == "torch":
                 pass
             else:
@@ -229,6 +251,8 @@ class GPRModel(gpytorch.models.ExactGP):
         """
         # Implement the BIC computation procedure here
 
+        self.train()
+
         if data is None:
             data = self.train_x_scaled
 
@@ -268,12 +292,12 @@ class Predictions:
         self.variance = variance
 
     def to_numpy(self):
-        self.mean = data_handling.to_numpy(self.mean)
-        self.variance = data_handling.to_numpy(self.variance)
+        self.mean = utils.to_numpy(self.mean)
+        self.variance = utils.to_numpy(self.variance)
 
     def to_torch(self):
-        self.mean = data_handling.to_torch(self.mean)
-        self.variance = data_handling.to_torch(self.mean)
+        self.mean = utils.to_torch(self.mean)
+        self.variance = utils.to_torch(self.mean)
 
 
 if __name__ == "__main__":
