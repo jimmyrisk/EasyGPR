@@ -6,6 +6,7 @@ import torch
 import gpytorch
 import numpy as np
 from easygpr.kernels import KernelWrapper
+import pandas as pd
 
 from easygpr.utils import MinMaxScaler, NoScale
 import easygpr.utils as utils
@@ -14,7 +15,7 @@ from easygpr.likelihoods import ScaledHeteroNoiseGaussianLikelihood
 
 
 
-
+# todo: handle reshaping of 1d arrays into 2d
 
 class GPRModel(gpytorch.models.ExactGP):
     """
@@ -57,6 +58,11 @@ class GPRModel(gpytorch.models.ExactGP):
             self.scaler.fit(train_x)
             self.train_x_scaled = self.scaler.scale(train_x)
 
+        if isinstance(train_x, pd.DataFrame):
+            self.feature_names = train_x.columns.tolist()
+        else:
+            self.feature_names = None
+
         self.train_x = train_x
         self.train_y = train_y
 
@@ -75,7 +81,8 @@ class GPRModel(gpytorch.models.ExactGP):
 
         # Handling kernel creation using KernelWrapper
         self.kernel_wrapper = KernelWrapper()
-        self.kernel_wrapper.create_kernel(kernel, **kernel_kwargs)
+        ard_num_dims = train_x.shape[1] if train_x is not None else None
+        self.kernel_wrapper.create_kernel(kernel, scaler=self.scaler, ard_num_dims=ard_num_dims, **kernel_kwargs)
         self.covar_module = self.kernel_wrapper.get_kernel_instance()
 
         self.predictions = None
@@ -274,11 +281,10 @@ class GPRModel(gpytorch.models.ExactGP):
 
         return self.bic
 
-    def print_kernel_hyperparameters(self):
-        """
-        Print the hyperparameter values of the kernel in a readable format.
-        """
-        self.kernel_wrapper.print_hyperparameters()
+    def print_hyperparameters(self, feature_names=None):
+        if feature_names is None:
+            feature_names = self.feature_names
+        return self.kernel_wrapper.print_hyperparameters(feature_names)
 
 
 # Additional utility functions can be added here as necessary

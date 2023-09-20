@@ -6,6 +6,8 @@ from gpytorch.priors import Prior
 from gpytorch.constraints import Interval
 from gpytorch.lazy import MatmulLazyTensor
 from typing import Optional
+import pandas as pd
+from easygpr.utils.data_handling import to_numpy
 
 from easygpr.utils import set_gpytorch_settings
 set_gpytorch_settings()
@@ -75,8 +77,10 @@ class MinKernel(Kernel):
 class KernelWrapper:
     def __init__(self):
         self.kernel_instance = None
+        self.original_train_x = None
 
-    def create_kernel(self, kernel_type, **kwargs):
+    def create_kernel(self, kernel_type, ard_num_dims=None, scaler=None, **kwargs):
+        self.scaler = scaler
         if isinstance(kernel_type, str):
             kernel_type = kernel_type.lower()
         if not isinstance(kernel_type, str):
@@ -84,10 +88,10 @@ class KernelWrapper:
             self.kernel_instance = kernel_type
         elif kernel_type in ["rbf", "squared exponential", "gaussian"]:
             # The RBF kernel has many names
-            self.kernel_instance = gpytorch.kernels.RBFKernel(**kwargs)
+            self.kernel_instance = gpytorch.kernels.RBFKernel(ard_num_dims=ard_num_dims, **kwargs)
         elif kernel_type in ["exp", "exponential", "laplace", "mat12", "m12"]:
             # The exponential kernel has many names
-            self.kernel_instance = gpytorch.kernels.MaternKernel(nu=0.5, **kwargs)
+            self.kernel_instance = gpytorch.kernels.MaternKernel(ard_num_dims=ard_num_dims, nu=0.5, **kwargs)
         elif kernel_type.startswith("mat"):
             if kernel_type == "mat32":
                 nu_value = 1.5
@@ -95,11 +99,11 @@ class KernelWrapper:
                 nu_value = 2.5
             else:
                 nu_value = float(kernel_type.split("_")[1])
-            self.kernel_instance = gpytorch.kernels.MaternKernel(nu=nu_value, **kwargs)
+            self.kernel_instance = gpytorch.kernels.MaternKernel(ard_num_dims=ard_num_dims, nu=nu_value, **kwargs)
         elif kernel_type.startswith("lin"):
-            self.kernel_instance = gpytorch.kernels.LinearKernel(**kwargs)
+            self.kernel_instance = gpytorch.kernels.PolynomialKernel(power = 1, ard_num_dims=ard_num_dims, **kwargs)
         elif kernel_type.startswith("min"):
-            self.kernel_instance = MinKernel(**kwargs)
+            self.kernel_instance = MinKernel(ard_num_dims=ard_num_dims, **kwargs)
 
         else:
             raise ValueError(f"Unknown kernel type: {kernel_type}")
@@ -109,12 +113,68 @@ class KernelWrapper:
     def get_kernel_instance(self):
         return self.kernel_instance
 
-    def print_hyperparameters(self):
-        if self.kernel_instance is not None:
-            for name, param in self.kernel_instance.named_hyperparameters():
-                print(f"{name}: {param.item()}")
-        else:
-            print("No kernel instance created yet.")
+    def print_hyperparameters(self, feature_names=None, verbose=False):
+        data = []
+        for name, param in self.kernel_instance.named_hyperparameters():
+            # Getting the constraint corresponding to the current hyperparameter
+            constraint = self.kernel_instance.constraint_for_parameter_name(name)
+
+            # Getting the raw value of the parameter
+            raw_value = param.data
+
+            # Getting the transformed value (according to GPyTorch)
+            transformed_value = constraint.transform(param)
+
+            # If it is a lengthscale, apply min/max unscaling
+            if 'lengthscale' in name:
+                unscaled_value = transformed_value * (self.scaler.maxs - self.scaler.mins)
+            else:
+                unscaled_value = transformed_value  # For non-lengthscale parameters, no unscaling is applied
+
+            # Converting to numpy for easier handling
+            unscaled_numpy = to_numpy(unscaled_value)
+            transformed_numpy = to_numpy(transformed_value)
+            raw_numpy = to_numpy(raw_value)
+
+            # Preparing data for dataframe
+            if unscaled_numpy.size > 1:  # Case where the parameter is a vector
+                for idx, value in enumerate(unscaled_numpy.flatten()):
+                    feature_name = feature_names[idx] if feature_names is not None else None
+
+                    entry = {
+                        "Hyperparameter Name": name,
+                        "Feature Name": feature_name,
+                        "Unscaled Value": value,
+                        "Scaled Value": transformed_numpy.flatten()[idx]
+                    }
+
+                    if verbose:
+                        entry.update({
+                            "Raw Value (GPyTorch)": raw_numpy[idx],
+                            "Constraint": str(constraint)
+                        })
+
+                    data.append(entry)
+            else:  # Case where the parameter is a scalar
+                entry = {
+                    "Hyperparameter Name": name,
+                    "Feature Name": None,
+                    "Unscaled Value": unscaled_numpy.item(),
+                    "Scaled Value": transformed_numpy.item()
+                }
+
+                if verbose:
+                    entry.update({
+                        "Raw Value (GPyTorch)": raw_numpy.item(),
+                        "Constraint": str(constraint)
+                    })
+
+                data.append(entry)
+
+        # Creating dataframe
+        df = pd.DataFrame(data)
+        return df
+
 
 # New kernel definitions
 class RBFKernel(gpytorch.kernels.RBFKernel):
