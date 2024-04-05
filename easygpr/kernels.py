@@ -3,7 +3,7 @@ import torch
 import gpytorch
 from gpytorch.kernels.kernel import Kernel
 from gpytorch.priors import Prior
-from gpytorch.constraints import Interval
+from gpytorch.constraints import Interval, Positive
 from gpytorch.lazy import MatmulLazyTensor
 from typing import Optional
 import pandas as pd
@@ -86,6 +86,7 @@ class KernelWrapper:
         if not isinstance(kernel_type, str):
             # todo: better handling of custom kernels
             self.kernel_instance = kernel_type
+            return self.kernel_instance
         elif kernel_type in ["rbf", "squared exponential", "gaussian"]:
             # The RBF kernel has many names
             self.kernel_instance = gpytorch.kernels.RBFKernel(ard_num_dims=ard_num_dims, **kwargs)
@@ -109,11 +110,14 @@ class KernelWrapper:
             raise ValueError(f"Unknown kernel type: {kernel_type}")
         # todo: handle kernel addition and multiplication
         self.kernel_instance = gpytorch.kernels.ScaleKernel(self.kernel_instance)
+        return self.kernel_instance
+
 
     def get_kernel_instance(self):
         return self.kernel_instance
 
     def print_hyperparameters(self, feature_names=None, verbose=False):
+        # todo: beta1_orig = beta1 / (x_max - x_min); beta0_orig = beta0 - beta1_orig * x_min
         data = []
         for name, param in self.kernel_instance.named_hyperparameters():
             # Getting the constraint corresponding to the current hyperparameter
@@ -199,3 +203,61 @@ class ExponentialKernel(gpytorch.kernels.MaternKernel):
 class ProductKernel(gpytorch.kernels.ProductKernel):
     def __init__(self, kern1, kern2):
         super().__init__(kern1, kern2)
+
+
+class PowerExponentialKernel(Kernel):
+    """
+    Power Exponential Kernel defined as exp(-(r/l)^alpha).
+
+    * r is the distance between inputs x1 and x2.
+    * l is a lengthscale parameter.
+    * alpha is a parameter satisfying 0 < alpha <= 2.
+    """
+
+    has_lengthscale = True
+
+    def __init__(
+            self,
+            alpha_prior: Optional[Prior] = None,
+            alpha_constraint: Optional[Interval] = None,
+            **kwargs
+    ):
+        super(PowerExponentialKernel, self).__init__(**kwargs)
+        if alpha_constraint is None:
+            alpha_constraint = Interval(1e-5, 2+1e-5, initial_value=1.5)
+
+        ard_num_dims = kwargs.get("ard_num_dims", 1)
+        self.register_parameter(
+            name="raw_alpha", parameter=torch.nn.Parameter(torch.ones(*self.batch_shape, 1, ard_num_dims))
+        )
+
+        if alpha_prior is not None:
+            if not isinstance(alpha_prior, Prior):
+                raise TypeError("Expected gpytorch.priors.Prior but got " + type(alpha_prior).__name__)
+            self.register_prior(
+                "alpha_prior",
+                alpha_prior,
+                lambda m: m.alpha,
+                lambda m, v: m._set_alpha(v),
+            )
+
+        self.register_constraint("raw_alpha", alpha_constraint)
+
+    @property
+    def alpha(self):
+        return self.raw_alpha_constraint.transform(self.raw_alpha)
+
+    @alpha.setter
+    def alpha(self, value):
+        self._set_alpha(value)
+
+    def _set_alpha(self, value):
+        if not torch.is_tensor(value):
+            value = torch.as_tensor(value).to(self.raw_alpha)
+        self.initialize(raw_alpha=self.raw_alpha_constraint.inverse_transform(value))
+
+    def forward(self, x1, x2, diag=False, **params):
+        # Calculate the distance
+        distance = self.covar_dist(x1, x2, diag=diag, **params)
+        # Apply the Power Exponential kernel function
+        return torch.exp(-torch.pow(distance.div(self.lengthscale), self.alpha))

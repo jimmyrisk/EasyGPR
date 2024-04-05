@@ -7,6 +7,7 @@ import gpytorch
 import numpy as np
 from easygpr.kernels import KernelWrapper
 import pandas as pd
+from gpytorch.constraints import Positive
 
 from easygpr.utils import MinMaxScaler, NoScale
 import easygpr.utils as utils
@@ -36,7 +37,7 @@ class GPRModel(gpytorch.models.ExactGP):
         self.noise_x = noise_x
 
         if likelihood is None:
-            likelihood = gpytorch.likelihoods.GaussianLikelihood()
+            likelihood = gpytorch.likelihoods.GaussianLikelihood(noise_constraint=Positive())
 
 
         if scale_x is True:
@@ -71,7 +72,7 @@ class GPRModel(gpytorch.models.ExactGP):
 
         # Initialize the mean module based on the specified type
         if mean == "none":
-            self.mean_module = None
+            self.mean_module = gpytorch.means.ZeroMean()
         elif mean == "constant":
             self.mean_module = gpytorch.means.ConstantMean()
         elif mean == "linear":
@@ -87,6 +88,7 @@ class GPRModel(gpytorch.models.ExactGP):
 
         self.predictions = None
 
+        # TODO: pretty sure it should be sigma^2...
         # Add a trainable noise parameter
         if heteroskedastic:
             self.sigma = torch.nn.Parameter(torch.tensor(1.0), requires_grad=True)
@@ -104,7 +106,7 @@ class GPRModel(gpytorch.models.ExactGP):
         else:
             return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
 
-    def fit_model(self, training_iterations=50, verbose = True, cosine_annealing = True):
+    def fit_model(self, training_iterations=50, verbose = True, cosine_annealing = True, lr = 0.1):
         """
         Fit the GPR model to the training data.
 
@@ -120,7 +122,7 @@ class GPRModel(gpytorch.models.ExactGP):
         self.train()
         self.likelihood.train()
 
-        optimizer = torch.optim.Adam(self.parameters(), lr=0.1)
+        optimizer = torch.optim.Adam(self.parameters(), lr=lr)
 
         if cosine_annealing == True:
             scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts
@@ -189,8 +191,9 @@ class GPRModel(gpytorch.models.ExactGP):
             x_sim = utils.to_torch(x_sim)
 
         with torch.no_grad():
+            sim_x_scaled = self.scaler.scale(x_sim)
             # Getting the predictive distribution
-            predictive_dist = self(x_sim)
+            predictive_dist = self(sim_x_scaled)
 
             if type == 'f':
                 # Getting samples from the GP (prior or posterior)
@@ -209,7 +212,7 @@ class GPRModel(gpytorch.models.ExactGP):
 
 
 
-    def make_predictions(self, test_x, type = "f", return_type="numpy"):
+    def make_predictions(self, test_x, type = "f", return_type="numpy", posterior = True):
         """
         Make predictions using the fitted GPR model.
 
@@ -219,8 +222,17 @@ class GPRModel(gpytorch.models.ExactGP):
         Returns:
             - predictions (Tensor): The predictions for the test data.
         """
-        self.eval()
-        self.likelihood.eval()
+
+        if posterior is True:
+            # GP regression predictions assume posterior
+            self.eval()
+            self.likelihood.eval()
+
+        else:
+            # Prior mode
+            self.train()
+            self.likelihood.train()
+
 
         test_x_scaled = self.scaler.scale(test_x)
 
@@ -242,6 +254,26 @@ class GPRModel(gpytorch.models.ExactGP):
         else:
             raise ValueError("Invalid return_type. Valid options are 'numpy' and 'torch'.")
         return self.predictions
+
+    # %%
+    def get_LOOCV(self):
+        self.train()
+
+        y_dist = self.likelihood(self(self.train_x_scaled))
+        K = y_dist.covariance_matrix
+        y = self.train_y
+
+        K_inv = torch.inverse(K)
+        Ky_inv_product = torch.matmul(K_inv, y.unsqueeze(-1))
+
+        K_inv_diagonal = torch.diag(K_inv)
+
+        y_loocv = y - Ky_inv_product.squeeze() / K_inv_diagonal
+
+        LOOCV_rmse = (y - y_loocv).pow(2).mean().sqrt()
+
+        return (LOOCV_rmse)
+
 
     def compute_bic(self, data = None):
         """
@@ -277,7 +309,7 @@ class GPRModel(gpytorch.models.ExactGP):
 
         # Compute the BIC
         with torch.no_grad():
-            self.bic = -2 * log_marginal_likelihood + self.num_param * np.log(n)
+            self.bic = - log_marginal_likelihood*n + self.num_param * np.log(n) / 2
 
         return self.bic
 
